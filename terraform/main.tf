@@ -33,7 +33,7 @@ resource "google_project_iam_member" "catalog_viewer" {
 # Grant the agent permission to submit serverless Spark jobs
 resource "google_project_iam_member" "spark_developer" {
   project = var.project_id
-  role    = "roles/dataproc.developer"
+  role    = "roles/dataproc.editor"
   member  = "serviceAccount:${google_service_account.agent_sa.email}"
 }
 
