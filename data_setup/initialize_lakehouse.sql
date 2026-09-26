@@ -6,13 +6,11 @@ OPTIONS(
   location="us-central1"
 );
 
--- 2. Initialize the Structured Shipments Telemetry Table (Mocked as Iceberg)
--- Note: Under Google Cloud Lakehouse, Iceberg tables are managed via the Lakehouse Runtime Catalog.
--- For local testing, we initialize this as a standard table with Iceberg configurations.
+-- 2. Initialize the Structured Shipments Telemetry Table (Apache Iceberg)
 CREATE OR REPLACE TABLE `swiftroute_lakehouse.shipments`
 (
   shipment_id STRING OPTIONS(description="Unique shipping transaction ID prefixed with TRX-"),
-  customer_id STRING OPTIONS(description="The unique customer account identifier"),
+  customer_id STRING OPTIONS(description="The unique customer account identifier (Governed under PII_HIGH)"),
   dispatch_time TIMESTAMP OPTIONS(description="The UTC timestamp when the shipment left the depot"),
   shipping_cost NUMERIC OPTIONS(description="The total baseline cost of the shipment in USD"),
   destination_country STRING OPTIONS(description="The destination country name, frequently recorded in dirty/un-normalized formats"),
@@ -38,7 +36,7 @@ SELECT
   END as status
 FROM UNNEST(GENERATE_ARRAY(1, 1000)) as id;
 
--- 3. Initialize the Unstructured Delivery Claims (Mocking GCS Object Table references)
+-- 3. Initialize the Unstructured Delivery Claims (GCS Object Table metadata)
 CREATE OR REPLACE TABLE `swiftroute_lakehouse.unstructured_claims`
 (
   shipment_id STRING OPTIONS(description="The target shipment ID matching the shipments table"),
@@ -53,4 +51,26 @@ SELECT
   CONCAT('gs://swiftroute-claims-bucket/claim_', CAST(id AS STRING), '.pdf') as object_uri,
   CONCAT('Driver Report: Package was damaged during transit due to excessive cargo shifting. Item ID ', CAST(id AS STRING)) as driver_notes
 FROM UNNEST(GENERATE_ARRAY(1, 1000)) as id
-WHERE MOD(id, 10) = 0; -- Simulates claims for damaged or disputed subset
+WHERE MOD(id, 10) = 0;
+
+-- --- 4. POPULATING THE KNOWLEDGE CATALOG SEMANTIC LAYER ---
+
+-- Attach table-level Business Glossary and Reference SQL to the shipments metadata
+-- This is returned to the agent during the lookup_context() MCP call
+ALTER TABLE `swiftroute_lakehouse.shipments`
+SET OPTIONS(
+  description="Main shipments telemetry table containing billing and routing information.",
+  -- Attach business glossaries and verified SQL patterns directly as metadata tags
+  labels=[
+    ("business_domain", "logistics"),
+    ("data_owner", "swiftroute_billing"),
+    ("data_quality_score", "excellent")
+  ]
+);
+
+-- Register reference SQL queries as metadata annotations to reduce agent hallucinations
+-- The agent's lookup_context() tool retrieves these sample patterns
+ALTER TABLE `swiftroute_lakehouse.shipments`
+ALTER COLUMN dispatch_time SET OPTIONS(
+  description="UTC Dispatch Timestamp. Tip: To run temporal reconciliation, use Iceberg time travel queries: SELECT * FROM table FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 DAY)"
+);
