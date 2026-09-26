@@ -1,15 +1,15 @@
 # agent/agent.py
 import os
+from google import adk  # Unified ADK namespace import
 from google.cloud import aiplatform
-from google import adk
 from google.cloud import bigquery
 from google.cloud import dataproc_v1 as dataproc
 
 # --- 1. MODEL CONTEXT PROTOCOL (MCP) DISCOVERY SETUP ---
 
-def get_knowledge_catalog_mcp_server() -> adk.McpServer:
+def get_knowledge_catalog_mcp_server():
     """
-    Connects to the native Knowledge Catalog MCP Tool Server.
+    Connects to the native Knowledge Catalog MCP Tool Server and returns it as an ADK Tool.
     Upon connection, the agent dynamically registers:
     - `search_entries`: For semantic data discovery of Iceberg tables.
     - `lookup_entry`: To resolve candidate tables to verified paths.
@@ -18,14 +18,13 @@ def get_knowledge_catalog_mcp_server() -> adk.McpServer:
     project_id = os.getenv("GCP_PROJECT_ID")
     region = os.getenv("GCP_REGION", "us-central1")
     
-    # Establish the MCP connection to the managed Knowledge Catalog endpoint
-    # In 2026, Google provides this as a native, managed service endpoint
-    mcp_config = adk.McpServerConfig(
+    # In the ADK, external MCP servers are registered as tools using the helper
+    catalog_mcp_tool = adk.Tool.from_mcp_server(
         name="google-knowledge-catalog-mcp",
-        uri=f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{region}/mcpServers/default"
+        url=f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{region}/mcpServers/default"
     )
     
-    return adk.McpServer(config=mcp_config)
+    return catalog_mcp_tool
 
 # --- 2. CUSTOM DATA EXECUTION TOOLS ---
 
@@ -118,21 +117,21 @@ You must choose the optimal engine for each task:
 """
 
 def create_swiftroute_agent() -> adk.Agent:
-    """Instantiates the ADK 2.0 Agent with our system instructions and custom tools."""
-    # Initialize the Vertex AI SDK (ADK 2.0)
+    """Instantiates the ADK Agent with our system instructions and custom tools."""
+    # Initialize the Vertex AI SDK
     aiplatform.init(
         project=os.getenv("GCP_PROJECT_ID"),
         location=os.getenv("GCP_REGION", "us-central1")
     )
     
-    # Retrieve the Knowledge Catalog MCP Server Connection
+    # Retrieve the Knowledge Catalog MCP Tool Server Connection
     catalog_mcp = get_knowledge_catalog_mcp_server()
     
-    # Instantiate the agent, attaching both the native MCP server and custom execution tools
+    # Instantiate the agent, attaching both the native MCP tool and custom execution tools
     agent = adk.Agent(
         display_name="SwiftRoute Lakehouse Orchestrator",
         instructions=SYSTEM_INSTRUCTION,
         model="gemini-3.8-flash",  # Leveraging state-of-the-art agentic reasoning
-        tools=[execute_lakehouse_sql, submit_spark_job, catalog_mcp] # <-- MCP tool server attached!
+        tools=[execute_lakehouse_sql, submit_spark_job, catalog_mcp] # <-- Attached!
     )
     return agent
