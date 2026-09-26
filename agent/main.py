@@ -1,16 +1,26 @@
-# This is a sample Python script.
+# agent/main.py
+import os
+from agent import create_swiftroute_agent
 
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+def main():
+    # Set default variables if not provided in environment
+    project_id = os.getenv("GCP_PROJECT_ID", "dssetup-202519")
+    os.environ["GCP_PROJECT_ID"] = project_id
+    
+    print("Initializing SwiftRoute Agent on Gemini Platform...")
+    agent = create_swiftroute_agent()
+    
+    # Establish conversational session for testing
+    session = agent.create_session()
+    
+    # Sample Test Query demonstrating temporal auditing
+    test_prompt = """
+    A customer is disputing their shipping cost for TRX-10. 
+    Analyze why the transaction cost differs from what was recorded in the rate card 3 days ago.
+    """
+    print(f"\n[Test Prompt]: {test_prompt}")
+    response = session.send_message(test_prompt)
+    print(f"[Agent Response]:\n{response.text}")
 
-
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press ⌘F8 to toggle the breakpoint.
-
-
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+if __name__ == "__main__":
+    main()
