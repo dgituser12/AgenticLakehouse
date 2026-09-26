@@ -2,3 +2,4 @@ google-cloud-aiplatform>=1.75.0
 google-cloud-bigquery>=3.20.0
 google-cloud-dataproc>=5.0.0
 cloudevents>=1.10.0
+google-adk
