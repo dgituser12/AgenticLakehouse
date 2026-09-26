@@ -1,7 +1,7 @@
 # agent/agent.py
 import os
 from google.cloud import aiplatform
-from google.cloud.aiplatform import adk  # ADK 2.0 Namespace
+from vertexai.preview import adk
 from google.cloud import bigquery
 from google.cloud import dataproc_v1 as dataproc
 
