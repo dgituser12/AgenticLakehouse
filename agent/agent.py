@@ -1,137 +1,106 @@
-# agent/agent.py
+# agent/main.py (Unified Sequential Demo Driver)
 import os
-from google import adk  # Unified ADK namespace import
-from google.cloud import aiplatform
-from google.cloud import bigquery
-from google.cloud import dataproc_v1 as dataproc
+import time
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types  # Import standard GenAI type wrappers
+from agent import create_swiftroute_agent
 
-# --- 1. MODEL CONTEXT PROTOCOL (MCP) DISCOVERY SETUP ---
-
-def get_knowledge_catalog_mcp_server():
+def execute_agent_scenario(runner, session_id, title, prompt):
     """
-    Connects to the native Knowledge Catalog MCP Tool Server and returns it as an ADK Tool.
-    Upon connection, the agent dynamically registers:
-    - `search_entries`: For semantic data discovery of Iceberg tables.
-    - `lookup_entry`: To resolve candidate tables to verified paths.
-    - `lookup_context`: To retrieve LLM-ready metadata, glossaries, and reference queries.
+    Executes a single agent scenario, streams the tool calls, and prints the final output.
     """
-    project_id = os.getenv("GCP_PROJECT_ID")
-    region = os.getenv("GCP_REGION", "us-central1")
+    print("\n" + "="*80)
+    print(f"🎬 RUNNING SCENARIO: {title}")
+    print(f"💬 [USER PROMPT]: {prompt}")
+    print("="*80)
     
-    # In the ADK, external MCP servers are registered as tools using the helper
-    catalog_mcp_tool = adk.Tool.from_mcp_server(
-        name="google-knowledge-catalog-mcp",
-        url=f"https://dataplex.googleapis.com/v1/projects/{project_id}/locations/{region}/mcpServers/default"
+    # 1. Wrap the prompt into a structured Content object
+    user_content = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=prompt)]
     )
     
-    return catalog_mcp_tool
-
-# --- 2. CUSTOM DATA EXECUTION TOOLS ---
-
-# SQL Execution Tool (Pillars 2 and 3)
-@adk.tool
-def execute_lakehouse_sql(sql_query: str) -> str:
-    """
-    Executes an analytical SQL query against the SwiftRoute Lakehouse tables.
-    Use this for:
-    - Lightweight analytical queries and aggregations.
-    - Iceberg Time Travel queries using 'FOR SYSTEM_TIME AS OF' (limited to 7 days).
-    - Highly targeted, late-stage joins between structured Iceberg tables 
-      and unstructured GCS Object Tables (BigQueryObjectRefs).
-    """
-    client = bigquery.Client()
-    try:
-        query_job = client.query(sql_query)
-        results = query_job.result()
-        # Convert results to a list of dict strings for the LLM
-        rows = [str(dict(row)) for row in results]
-        return "\n".join(rows[:25])  # Limit response to protect context window
-    except Exception as e:
-        return f"SQL Execution Error: {str(e)}"
-
-# Serverless Spark Job Tool (Pillar 1)
-@adk.tool
-def submit_spark_job(pyspark_code: str, target_table: str) -> str:
-    """
-    Submits a serverless PySpark batch job to Managed Service for Apache Spark.
-    Use this when the user requests large-scale data cleansing, 
-    massive row-by-row updates, or ML feature transformations over Iceberg tables.
-    """
-    project_id = os.getenv("GCP_PROJECT_ID")
-    region = os.getenv("GCP_REGION", "us-central1")
-    bucket_name = os.getenv("GCP_SPARK_BUCKET", f"{project_id}-spark-jobs")
-    
-    client = dataproc.BatchControllerClient(
-        client_options={"api_endpoint": f"{region}-dataproc.googleapis.com:443"}
+    # 2. Execute the prompt directly and capture the event stream
+    events = runner.run(
+        session_id=session_id,
+        user_id="user_123",
+        new_message=user_content
     )
     
-    pyspark_file_uri = f"gs://{bucket_name}/temp_agent_job.py"
+    # 3. Iterate through the generator events safely, printing actions in real-time
+    print("\n[Processing Agent Event Stream...]")
+    for event in events:
+        if event.content and event.content.parts:
+            for part in event.content.parts:
+                # Safe check for tool/function calls
+                if hasattr(part, 'function_call') and part.function_call:
+                    print(f"\n⚡ [AGENT ACTION]: Calling Tool '{part.function_call.name}'")
+                    print(f"   [ARGUMENTS]: {part.function_call.args}")
+                
+                # Safe check for tool/function responses
+                elif hasattr(part, 'function_response') and part.function_response:
+                    print(f"\n✨ [TOOL OUTPUT]: {part.function_response.response}")
+
+        # Check if the event is the final text response from the model
+        if event.is_final_response() and event.content:
+            final_answer = event.content.parts[0].text
+            print(f"\n[Agent Response]:\n{final_answer}")
+
+def main():
+    # Setup Default Environment Variables for local dry-run testing
+    os.environ["LAKEHOUSE_DRY_RUN"] = os.getenv("LAKEHOUSE_DRY_RUN", "true")
+    project_id = os.getenv("GCP_PROJECT_ID", "dssetup-202519")
+    os.environ["GCP_PROJECT_ID"] = project_id
     
-    # Configure Spark to run the job targeting the REST-based Lakehouse Runtime Catalog
-    # This ensures that Spark writes safely using open Apache Iceberg formats
-    batch = dataproc.Batch(
-        pyspark_batch=dataproc.PySparkBatch(
-            main_python_file_uri=pyspark_file_uri,
-            jar_file_uris=["gcs://spark-lib/iceberg/iceberg-spark-runtime-3.5_2.12.jar"]
+    print(f"Initializing SwiftRoute Agent on Gemini Platform [Dry-Run Mode: {os.environ['LAKEHOUSE_DRY_RUN']}]...")
+    agent = create_swiftroute_agent()
+    
+    # Initialize the Session Service and Runner
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=agent,
+        app_name="swiftroute_app",
+        session_service=session_service,
+        auto_create_session=True  # Enables automatic session creation
+    )
+    
+    # Define our three core business scenarios
+    scenarios = [
+        {
+            "id": "session_pillar_1",
+            "title": "Pillar 1: Mass Sensor Telemetry Cleansing (Auto-Spark)",
+            "prompt": "Normalize the dirty, inconsistent country names across all 100 million sensor tracking rows in our shipments telemetry table. Ensure this is done safely so that we do not corrupt our production table in case of data quality failures."
+        },
+        {
+            "id": "session_pillar_2",
+            "title": "Pillar 2: Unstructured Damage Claim Analysis (Auto-SQL Join)",
+            "prompt": "We have high-value shipments that were marked as DAMAGED. Locate these specific shipments, find the raw driver claim PDFs stored in our unstructured object bucket, and summarize the complaints."
+        },
+        {
+            "id": "session_pillar_3",
+            "title": "Pillar 3: Point-in-Time Billing Auditing (Auto-Time Travel)",
+            "prompt": "A merchant is disputing their shipment invoice for TRX-10. Reconstruct what our dynamic shipping rate cards looked like exactly 3 days ago to verify if they were overcharged."
+        }
+    ]
+    
+    # Run all three scenarios sequentially
+    for idx, scenario in enumerate(scenarios, 1):
+        execute_agent_scenario(
+            runner=runner,
+            session_id=scenario["id"],
+            title=scenario["title"],
+            prompt=scenario["prompt"]
         )
-    )
-    
-    try:
-        request = dataproc.CreateBatchRequest(
-            parent=f"projects/{project_id}/regions/{region}", 
-            batch=batch
-        )
-        # client.create_batch(request=request) # Handled asynchronously
-        return f"Successfully generated PySpark script and submitted serverless job targeting '{target_table}'."
-    except Exception as e:
-        return f"Spark Job Submission Error: {str(e)}"
+        
+        # Brief pause between scenarios for readability
+        if idx < len(scenarios):
+            print("\nPausing for 3 seconds before the next demonstration...")
+            time.sleep(3)
+            
+    print("\n" + "="*80)
+    print("🏆 DEMONSTRATION SUITE COMPLETED SUCCESSFULLY!")
+    print("="*80)
 
-# --- 3. SYSTEM INSTRUCTION & AGENT CONSTRUCTOR ---
-
-SYSTEM_INSTRUCTION = """
-You are a highly capable Lakehouse Multi-Engine Orchestrator for SwiftRoute Logistics.
-Your job is to help users analyze, transform, and reason over Apache Iceberg tables in Google Cloud Lakehouse.
-
-You must choose the optimal engine for each task:
-1. DATA DISCOVERY:
-   - Always run 'search_entries' first to discover assets.
-   - Use 'lookup_entry' and then 'lookup_context' to retrieve schema details, business glossaries, 
-     and sample SQL patterns for the discovered tables.
-
-2. ENGINE SELECTION RULE:
-   - For fast analytical queries, transactional checks, or viewing historical states, use 'execute_lakehouse_sql'.
-   - For heavy data manipulation, machine learning preparation, or batch transformations, use 'submit_spark_job'. Do not use SQL for high-resource transformations.
-
-3. DATA QUALITY & PROMOTION (Staging Pattern):
-   - When generating PySpark transformations, write the output back to a staging table (e.g., 'shipments_agent_staging') instead of writing directly to the production 'shipments' table.
-   - Run automated validation rules, and then use SQL to MERGE (Preview) the staging rows into production.
-
-4. TEMPORAL RECONCILIATION:
-   - For billing and contract audits, write SQL queries leveraging Iceberg Time Travel: 'FOR SYSTEM_TIME AS OF'. Note that BigQuery queries are limited to a 7-day time travel window.
-
-5. UNSTRUCTURED LATE-STAGE BLENDING:
-   - When asked to analyze driver reports or PDF claims associated with structured records, perform a late-stage blend:
-     First, write a SQL query to filter the structured Iceberg table to isolate the specific targeted rows. 
-     Second, join those rows with the GCS Object Table (via BigQueryObjectRefs).
-     Third, apply AI.GENERATE_TEXT to run Gemini only on those filtered rows to analyze the files.
-"""
-
-def create_swiftroute_agent() -> adk.Agent:
-    """Instantiates the ADK Agent with our system instructions and custom tools."""
-    # Initialize the Vertex AI SDK
-    aiplatform.init(
-        project=os.getenv("GCP_PROJECT_ID"),
-        location=os.getenv("GCP_REGION", "us-central1")
-    )
-    
-    # Retrieve the Knowledge Catalog MCP Tool Server Connection
-    catalog_mcp = get_knowledge_catalog_mcp_server()
-    
-    # Instantiate the agent, attaching both the native MCP tool and custom execution tools
-    agent = adk.Agent(
-        display_name="SwiftRoute Lakehouse Orchestrator",
-        instructions=SYSTEM_INSTRUCTION,
-        model="gemini-3.8-flash",  # Leveraging state-of-the-art agentic reasoning
-        tools=[execute_lakehouse_sql, submit_spark_job, catalog_mcp] # <-- Attached!
-    )
-    return agent
+if __name__ == "__main__":
+    main()
